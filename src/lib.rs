@@ -30,84 +30,84 @@ impl Scraper {
         }
     }
 
-    pub async fn scrape_data(&self) -> Vec<Clinic> {
+    pub async fn scrape_pages(&self) -> Result<Vec<Clinic>, Box<dyn Error>> {
         let mut clinics = Vec::new();
         let client = Client::new();
 
-        for page_num in 1..=self.max_pages {
-            println!("Scraping page {}.", page_num);
+        let pages = (1..=self.max_pages).collect::<Vec<_>>();
 
-            let page_url = format!("{}{}?page={}", self.base_url, self.query, page_num);
-            let res = client.get(&page_url).send();
-
-            match res.await {
-                Ok(response) => {
-                    if response.status().is_success() {
-                        let body = response.text().await.unwrap();
-                        let document = Document::from(&body[..]);
-
-                        let results = document.find(Class("js-entry-card-container"));
-                        let results = results.collect::<Vec<_>>();
-                        if results.len() == 0 {
-                            println!("No results found for page {}.", page_num);
-                            continue;
-                        }
-
-                        for result in results {
-                            let name = result
-                                .find(Name("h2").and(Class("card-info-title")))
-                                .next()
-                                .unwrap();
-
-                            let address = result.find(Class("card-info-address")).next().unwrap();
-
-                            let address_text = address.text().trim().to_owned();
-                            let postcode = address_text
-                                .split_whitespace()
-                                .find(|w| w.chars().all(|c| c.is_numeric()));
-
-                            let city = address_text.trim().split_whitespace().last();
-
-                            let phone = result
-                                .find(Name("a"))
-                                .filter_map(|n| n.attr("href"))
-                                .find(|href| href.starts_with("tel:"));
-
-                            let website = result
-                                .find(Name("a"))
-                                .filter_map(|n| n.attr("href"))
-                                .find(|href| href.starts_with("http"));
-
-                            let clinic = Clinic {
-                                name: name.text().trim().to_owned(),
-                                address: address_text.to_owned(),
-                                postcode: postcode.map(|p| p.to_owned()),
-                                city: city.map(|c| c.to_owned()),
-                                phone: phone.map(|p| p.to_owned()),
-                                website: website.map(|w| w.to_owned()),
-                            };
-
-                            clinics.push(clinic);
-                        }
-                    } else {
-                        println!(
-                            "Failed to fetch page {}. Response status: {:?}",
-                            page_num,
-                            response.status()
-                        );
-                    }
-                }
-                Err(err) => {
-                    println!(
-                        "Failed to fetch page {}. Error: {}",
-                        page_num,
-                        err.to_string()
-                    );
-                }
-            }
+        for page_num in pages {
+            let results = self.scrape_page(page_num, &client).await?;
+            clinics.extend(results);
         }
 
-        clinics
+        Ok(clinics)
+    }
+
+    pub async fn scrape_page(
+        &self,
+        page_num: i32,
+        client: &Client,
+    ) -> Result<Vec<Clinic>, Box<dyn Error>> {
+        println!("Scraping page {}.", page_num);
+
+        let page_url = format!("{}{}?page={}", self.base_url, self.query, page_num);
+        let res = client.get(&page_url).send().await?;
+
+        if !res.status().is_success() {
+            println!(
+                "Failed to fetch page {}. Response status: {:?}",
+                page_num,
+                res.status()
+            );
+            return Ok(vec![]);
+        }
+
+        let body = res.text().await.unwrap();
+
+        let results = Document::from(&body[..])
+            .find(Class("js-entry-card-container"))
+            .map(|result| {
+                let name = result
+                    .find(Name("h2").and(Class("card-info-title")))
+                    .next()
+                    .unwrap();
+
+                let address = result.find(Class("card-info-address")).next().unwrap();
+
+                let address_text = address.text().trim().to_owned();
+                let postcode = address_text
+                    .split_whitespace()
+                    .find(|w| w.chars().all(|c| c.is_numeric()));
+
+                let city = address_text.trim().split_whitespace().last();
+
+                let phone = result
+                    .find(Name("a"))
+                    .filter_map(|n| n.attr("href"))
+                    .find(|href| href.starts_with("tel:"));
+
+                let website = result
+                    .find(Name("a"))
+                    .filter_map(|n| n.attr("href"))
+                    .find(|href| href.starts_with("http"));
+
+                Clinic {
+                    name: name.text().trim().to_owned(),
+                    address: address_text.to_owned(),
+                    postcode: postcode.map(|p| p.to_owned()),
+                    city: city.map(|c| c.to_owned()),
+                    phone: phone.map(|p| p.to_owned()),
+                    website: website.map(|w| w.to_owned()),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if results.len() == 0 {
+            println!("No results found for page {}.", page_num);
+        }
+
+        Ok(results)
     }
 }
 
