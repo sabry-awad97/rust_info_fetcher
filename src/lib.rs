@@ -5,6 +5,8 @@ use select::document::Document;
 use select::predicate::{Class, Name, Predicate};
 use std::error::Error;
 use std::fs::File;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 #[derive(Debug)]
 pub struct Clinic {
@@ -20,24 +22,30 @@ pub struct Scraper {
     base_url: String,
     query: String,
     max_pages: i32,
+    semaphore: Arc<Semaphore>,
 }
 
 impl Scraper {
-    pub fn new(base_url: String, query: String, max_pages: i32) -> Self {
+    pub fn new(base_url: String, query: String, max_pages: i32, max_parallel: usize) -> Self {
         Self {
             base_url,
             query,
             max_pages,
+            semaphore: Arc::new(Semaphore::new(max_parallel)),
         }
     }
 
     pub async fn scrape_pages_parallel(&self) -> Result<Vec<Clinic>, Box<dyn Error>> {
-        let client = Client::new();
         let mut clinics = Vec::new();
         let pages = (1..=self.max_pages).collect::<Vec<_>>();
-        let scraped_pages = pages
-            .iter()
-            .map(|page_num| self.scrape_page(*page_num, &client));
+        let semaphore = self.semaphore.clone();
+        let scraped_pages = pages.iter().map(|page_num| {
+            let semaphore = semaphore.clone();
+            async move {
+                let _guard = semaphore.acquire().await;
+                self.scrape_page(*page_num).await
+            }
+        });
 
         let results = join_all(scraped_pages).await;
 
@@ -52,12 +60,10 @@ impl Scraper {
 
     pub async fn scrape_pages(&self) -> Result<Vec<Clinic>, Box<dyn Error>> {
         let mut clinics = Vec::new();
-        let client = Client::new();
-
         let pages = (1..=self.max_pages).collect::<Vec<_>>();
 
         for page_num in pages {
-            let page_clinics = self.scrape_page(page_num, &client).await?;
+            let page_clinics = self.scrape_page(page_num).await?;
             clinics.extend(page_clinics);
         }
 
@@ -66,11 +72,11 @@ impl Scraper {
 
     pub async fn scrape_page(
         &self,
-        page_num: i32,
-        client: &Client,
+        page_num: i32
     ) -> Result<Vec<Clinic>, Box<dyn Error>> {
         println!("Scraping page {}.", page_num);
 
+        let client = Client::new();
         let page_url = format!("{}{}?page={}", self.base_url, self.query, page_num);
         let res = client.get(&page_url).send().await?;
 
@@ -83,7 +89,7 @@ impl Scraper {
             return Ok(vec![]);
         }
 
-        let body = res.text().await.unwrap();
+        let body = res.text().await?;
 
         let results = Document::from(&body[..])
             .find(Class("js-entry-card-container"))
