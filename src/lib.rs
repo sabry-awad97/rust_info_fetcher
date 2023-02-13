@@ -42,8 +42,10 @@ impl Scraper {
         let scraped_pages = pages.iter().map(|page_num| {
             let semaphore = semaphore.clone();
             async move {
-                let _guard = semaphore.acquire().await;
-                self.scrape_page(*page_num).await
+                let guard = semaphore.acquire().await;
+                let results = self.scrape_page(*page_num).await;
+                drop(guard);
+                results
             }
         });
 
@@ -70,10 +72,7 @@ impl Scraper {
         Ok(clinics)
     }
 
-    pub async fn scrape_page(
-        &self,
-        page_num: i32
-    ) -> Result<Vec<Clinic>, Box<dyn Error>> {
+    pub async fn scrape_page(&self, page_num: i32) -> Result<Vec<Clinic>, Box<dyn Error>> {
         println!("Scraping page {}.", page_num);
 
         let client = Client::new();
