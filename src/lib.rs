@@ -1,4 +1,5 @@
 use csv::Writer;
+use futures::future::join_all;
 use reqwest::Client;
 use select::document::Document;
 use select::predicate::{Class, Name, Predicate};
@@ -30,6 +31,25 @@ impl Scraper {
         }
     }
 
+    pub async fn scrape_pages_parallel(&self) -> Result<Vec<Clinic>, Box<dyn Error>> {
+        let client = Client::new();
+        let mut clinics = Vec::new();
+        let pages = (1..=self.max_pages).collect::<Vec<_>>();
+        let scraped_pages = pages
+            .iter()
+            .map(|page_num| self.scrape_page(*page_num, &client));
+
+        let results = join_all(scraped_pages).await;
+
+        for result in results {
+            if let Ok(page_clinics) = result {
+                clinics.extend(page_clinics)
+            }
+        }
+
+        Ok(clinics)
+    }
+
     pub async fn scrape_pages(&self) -> Result<Vec<Clinic>, Box<dyn Error>> {
         let mut clinics = Vec::new();
         let client = Client::new();
@@ -37,8 +57,8 @@ impl Scraper {
         let pages = (1..=self.max_pages).collect::<Vec<_>>();
 
         for page_num in pages {
-            let results = self.scrape_page(page_num, &client).await?;
-            clinics.extend(results);
+            let page_clinics = self.scrape_page(page_num, &client).await?;
+            clinics.extend(page_clinics);
         }
 
         Ok(clinics)

@@ -12,7 +12,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         MAX_PAGES,
     );
 
-    let clinics = scraper.scrape_pages().await?;
+    // let clinics = scraper.scrape_pages().await?;
+    let clinics = scraper.scrape_pages_parallel().await?;
 
     if let Err(err) = write_to_csv(clinics) {
         println!("Failed to write to csv. Error: {}", err);
